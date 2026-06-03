@@ -8,9 +8,6 @@ import { convertPdfToImage } from "~/lib/pdf2img";
 import { generateUUID } from "~/lib/utils";
 import { prepareInstructions } from "~/constants";
 
-export function loader({}: Route.LoaderArgs) {
-  return null;
-}
 
 export default function Upload() {
     const {auth, isLoading, fs, ai, kv} = usePuterStore();
@@ -65,6 +62,7 @@ export default function Upload() {
          await kv.set(`resume:${uuid}`, JSON.stringify(data));
          setStatusText("Analysis complete");
          console.log({data});
+         navigate(`/resume/${uuid}`);
     }
 
     const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
