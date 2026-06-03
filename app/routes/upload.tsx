@@ -2,15 +2,70 @@ import { Navbar } from "~/components/Navbar";
 import type { Route } from "./+types/upload";
 import { useState, type FormEvent } from "react";
 import FileUploader from "~/components/FileUploader";
+import { usePuterStore } from "~/lib/puter";
+import { useNavigate } from "react-router";
+import { convertPdfToImage } from "~/lib/pdf2img";
+import { generateUUID } from "~/lib/utils";
+import { prepareInstructions } from "~/constants";
 
 export function loader({}: Route.LoaderArgs) {
   return null;
 }
 
 export default function Upload() {
+    const {auth, isLoading, fs, ai, kv} = usePuterStore();
+    const navigate = useNavigate();
     const [isProcessing, setIsProcessing] = useState(false);
     const [statusText, setStatusText] = useState('');
     const [file, setFile] = useState<File | null>(null);
+
+    const handleAnalyze = async ({companyName, jobTitle, jobDescription, file} : {companyName: string, jobTitle: string, jobDescription: string, file: File}) => {
+        setIsProcessing(true);
+        setStatusText('Uploading the file...');
+        const uploadedFile = await fs.upload([file])
+        if(!uploadedFile) {
+            setStatusText('Failed to upload the file');
+            return;
+        }
+        setStatusText("Converting to image...");
+        const imageFile = await convertPdfToImage(file);
+        console.log({imageFile});
+
+        if(!imageFile.file) return setStatusText('Failed to convert to image');
+        setStatusText("Updating the image...");
+
+        const uploadedImage = await fs.upload([imageFile.file])
+        if(!uploadedImage) return setStatusText('Failed to upload the image');
+        setStatusText("Preparing data...");
+
+        const uuid = generateUUID();
+
+        const data ={
+            id: uuid,
+            resumePath: uploadedFile.path,
+            imagePath: uploadedImage.path,
+            companyName,
+            jobTitle,
+            jobDescription,
+            feedback: '',
+        }
+        await kv.set(`resume:${uuid}`, JSON.stringify(data));
+        setStatusText("Analyzing");
+        const feedback = await ai.feedback(
+            uploadedFile.path,
+            prepareInstructions({jobTitle, jobDescription})
+        )
+        if(!feedback) return setStatusText('Failed to analyze');
+
+        const feedbackText = typeof feedback.message.content === 'string'
+         ? feedback.message.content
+         : feedback.message.content[0].text;
+
+         data.feedback = JSON.parse(feedbackText);
+         await kv.set(`resume:${uuid}`, JSON.stringify(data));
+         setStatusText("Analysis complete");
+         console.log({data});
+    }
 
     const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -18,16 +73,13 @@ export default function Upload() {
         if (!form) return;
         const formData = new FormData(form);
 
-        const companyName = formData.get('company-name');
-        const jobTitle = formData.get('job-title');
-        const jobDescription = formData.get('job-description');
+        const companyName = formData.get('company-name') as string;
+        const jobTitle = formData.get('job-title') as string;
+        const jobDescription = formData.get('job-description') as string;
 
-        console.log({
-            companyName,
-            jobTitle,
-            jobDescription,
-            file,
-        })
+        if(!file) return;
+
+        handleAnalyze({companyName, jobTitle, jobDescription, file});
     }
 
     const handleFileSelect = (file: File | null) => {
@@ -51,7 +103,7 @@ export default function Upload() {
             )}
 
             {!isProcessing && (
-                <form id="upload-form" onClick={handleSubmit} className="flex flex-col gap-4 mt-8">
+                <form id="upload-form" onSubmit={handleSubmit} className="flex flex-col gap-4 mt-8">
                     <div className="form-div">
                         <label htmlFor="company-name">Company Name</label>
                         <input type="text" placeholder="Company Name" name="company-name" />
@@ -64,7 +116,7 @@ export default function Upload() {
 
                     <div className="form-div">
                         <label htmlFor="job-description">Job Description</label>
-                        <textarea  rows={5} placeholder="Write a clear & concise job description with responsibilities & expectations..." name="job-title" />
+                        <textarea  rows={5} placeholder="Write a clear & concise job description with responsibilities & expectations..." name="job-description" />
                     </div>
 
 
